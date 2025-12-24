@@ -53,8 +53,24 @@ const rxForm = ref({
   // 詳細運送資料
   shipDetail: { city: '', state: '', zip: '', country: '', tel: '' },
   
+  shippingType: 'Regular', // Urgent, Express, Regular
+  shipTo: 'Clinic',        // Clinic, Pickup, Patient
+  patientShipOption: 'Same', // Same, Other (當 shipTo == Patient 時用)
+  
+  // 詳細運送資料
+  shipDetail: { city: '', state: '', zip: '', country: '', tel: '' },
+  
   payment: 'Credit Card'
 })
+
+// === Admin & Pharmacy Data ===
+const allUsers = ref([])
+const systemSettings = ref([])
+const pharmacyOrders = ref([])
+const showUserModal = ref(false)
+const userForm = ref({ id: null, username: '', password: '', role: 'doctor', name: '' })
+const settingForm = ref({ key: '', value: '', description: '' })
+
 
 // === 核心邏輯 ===
 const handleLogin = async () => {
@@ -68,10 +84,18 @@ const handleLogin = async () => {
     if (data.success) {
       user.value = data.user
       viewState.value = 'dashboard'
+      viewState.value = 'dashboard'
       if (user.value.role === 'doctor') {
         currentTab.value = 'new-rx'
         loadData()
+      } else if (user.value.role === 'pharmacy') {
+        currentTab.value = 'pharm-orders'
+        loadPharmacyData()
+      } else if (user.value.role === 'admin') {
+        currentTab.value = 'admin-users'
+        loadAdminData()
       }
+
     } else { alert(data.message) }
   } catch(e) { alert('連線失敗') }
 }
@@ -85,7 +109,71 @@ const loadData = async () => {
   patients.value = await pRes.json()
   medicines.value = await mRes.json()
   orderHistory.value = await oRes.json()
+  orderHistory.value = await oRes.json()
 }
+
+const loadPharmacyData = async () => {
+  const [oRes, mRes] = await Promise.all([
+    fetch('http://localhost:3001/api/orders'), // Get all orders, filter client side or backend
+    fetch('http://localhost:3001/api/medicines')
+  ])
+  const orders = await oRes.json()
+  pharmacyOrders.value = orders.filter(o => o.status !== 'completed') // Show pending/received
+  medicines.value = await mRes.json()
+}
+
+const loadAdminData = async () => {
+  const [uRes, sRes] = await Promise.all([
+    fetch('http://localhost:3001/api/users'),
+    fetch('http://localhost:3001/api/settings')
+  ])
+  allUsers.value = await uRes.json()
+  systemSettings.value = await sRes.json()
+}
+
+// === Pharmacy Actions ===
+const completeOrder = async (orderId) => {
+  await fetch(`http://localhost:3001/api/orders/${orderId}/status`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'completed' })
+  })
+  alert('Order Completed!')
+  loadPharmacyData()
+}
+
+// === Admin Actions ===
+const saveUser = async () => {
+  const method = userForm.value.id ? 'PUT' : 'POST'
+  const url = userForm.value.id ? `http://localhost:3001/api/users/${userForm.value.id}` : 'http://localhost:3001/api/users'
+  
+  await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(userForm.value)
+  })
+  alert('User Saved!')
+  showUserModal.value = false
+  loadAdminData()
+}
+const editUser = (u) => { userForm.value = { ...u }; showUserModal.value = true }
+const deleteUser = async (id) => {
+  if(!confirm('Delete user?')) return
+  await fetch(`http://localhost:3001/api/users/${id}`, { method: 'DELETE' })
+  loadAdminData()
+}
+
+const saveSetting = async () => {
+  await fetch('http://localhost:3001/api/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settingForm.value)
+  })
+  alert('Setting Saved!')
+  settingForm.value = { key: '', value: '', description: '' }
+  loadAdminData()
+}
+
 
 // 病人搜尋
 const onPatientInput = () => {
@@ -171,7 +259,11 @@ const logout = () => { user.value = null; viewState.value = 'login' }
     
     <div v-if="viewState === 'login'" class="auth-box">
       <h1>BEMA DEMO</h1>
-      <select v-model="loginForm.role" class="input-field"><option value="doctor">Doctor</option><option value="admin">Admin</option></select>
+      <select v-model="loginForm.role" class="input-field">
+        <option value="doctor">Doctor</option>
+        <option value="pharmacy">Pharmacy</option>
+        <option value="admin">Admin</option>
+      </select>
       <input v-model="loginForm.username" placeholder="Username" class="input-field">
       <input v-model="loginForm.password" type="password" placeholder="Password" class="input-field">
       <button @click="handleLogin" class="btn-primary">Login</button>
@@ -180,11 +272,27 @@ const logout = () => { user.value = null; viewState.value = 'login' }
     <div v-else class="layout">
       <aside class="sidebar">
         <div class="brand">OPOS</div>
-        <div class="user-display">Dr. {{ user.name }}</div>
+        <div class="user-display">{{ user.role.toUpperCase() }}: {{ user.name || user.username }}</div>
         <nav>
-          <div class="menu-item" @click="currentTab='new-rx'" :class="{active: currentTab==='new-rx'}">New Patient RX</div>
-          <div class="menu-item" @click="currentTab='my-patients'" :class="{active: currentTab==='my-patients'}">My Patients</div>
-          <div class="menu-item" @click="currentTab='history'" :class="{active: currentTab==='history'}">Order History</div>
+          <!-- Doctor Menu -->
+          <template v-if="user.role === 'doctor'">
+            <div class="menu-item" @click="currentTab='new-rx'" :class="{active: currentTab==='new-rx'}">New Patient RX</div>
+            <div class="menu-item" @click="currentTab='my-patients'" :class="{active: currentTab==='my-patients'}">My Patients</div>
+            <div class="menu-item" @click="currentTab='history'" :class="{active: currentTab==='history'}">Order History</div>
+          </template>
+
+          <!-- Pharmacy Menu -->
+          <template v-if="user.role === 'pharmacy'">
+            <div class="menu-item" @click="currentTab='pharm-orders'" :class="{active: currentTab==='pharm-orders'}">Pending Orders</div>
+            <div class="menu-item" @click="currentTab='pharm-inventory'" :class="{active: currentTab==='pharm-inventory'}">Inventory</div>
+          </template>
+
+          <!-- Admin Menu -->
+          <template v-if="user.role === 'admin'">
+            <div class="menu-item" @click="currentTab='admin-users'" :class="{active: currentTab==='admin-users'}">Manage Employees</div>
+            <div class="menu-item" @click="currentTab='admin-settings'" :class="{active: currentTab==='admin-settings'}">Pricing & Settings</div>
+          </template>
+
           <div class="menu-item logout" @click="logout">Logout</div>
         </nav>
       </aside>
@@ -371,6 +479,106 @@ const logout = () => { user.value = null; viewState.value = 'login' }
             <tbody><tr v-for="o in orderHistory" :key="o.id"><td>{{ o.order_no }}</td><td>{{ o.status }}</td></tr></tbody>
           </table>
         </div>
+
+        <!-- Pharmacy Views -->
+        <div v-if="currentTab === 'pharm-orders'" class="paper">
+          <h2>Pending Orders</h2>
+          <table class="data-table">
+            <thead><tr><th>Order No</th><th>Patient</th><th>Status</th><th>Action</th></tr></thead>
+            <tbody>
+              <tr v-for="o in pharmacyOrders" :key="o.id">
+                <td>{{ o.order_no }}</td>
+                <td>{{ o.first_name }} {{ o.last_name }}</td>
+                <td><span class="badge">{{ o.status }}</span></td>
+                <td>
+                  <button v-if="o.status !== 'completed'" @click="completeOrder(o.id)" class="btn-primary">Complete</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="pharmacyOrders.length === 0" class="mt-2 text-gray">No pending orders.</div>
+        </div>
+
+        <div v-if="currentTab === 'pharm-inventory'" class="paper">
+          <h2>Medicine Inventory</h2>
+          <table class="data-table">
+            <thead><tr><th>Name</th><th>Stock (g)</th><th>Unit Price</th></tr></thead>
+            <tbody>
+              <tr v-for="m in medicines" :key="m.id">
+                <td>{{ m.name }}</td>
+                <td>{{ m.stock_quantity }}</td>
+                <td>${{ m.price_per_unit }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Admin Views -->
+        <div v-if="currentTab === 'admin-users'" class="paper">
+          <div class="flex-between"><h2>Employee Management</h2><button @click="userForm={id:null,role:'doctor',username:'',password:'',name:''};showUserModal=true" class="btn-primary">+ New User</button></div>
+          <table class="data-table">
+            <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr v-for="u in allUsers" :key="u.id">
+                <td>{{ u.username }}</td>
+                <td>{{ u.name }}</td>
+                <td>{{ u.role }}</td>
+                <td>
+                  <button @click="editUser(u)" class="btn-reg">Edit</button>
+                  <button @click="deleteUser(u.id)" class="btn-reg" style="background:#e74c3c;margin-left:5px">Del</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+
+           <div v-if="showUserModal" class="modal-overlay">
+            <div class="modal-content yellow-style">
+              <h3>{{ userForm.id ? 'Edit' : 'New' }} User</h3>
+              <div class="form-grid">
+                <label>Username:</label><input v-model="userForm.username">
+                <label>Password:</label><input v-model="userForm.password">
+                <label>Name:</label><input v-model="userForm.name">
+                <label>Role:</label>
+                <select v-model="userForm.role">
+                  <option value="doctor">Doctor</option>
+                  <option value="pharmacy">Pharmacy</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <div class="modal-footer mt-4">
+                <button @click="saveUser" class="btn-reg">Save</button>
+                <button @click="showUserModal=false" class="btn-reg" style="background:#999">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="currentTab === 'admin-settings'" class="paper">
+           <h2>Pricing & Restrictions</h2>
+           <div class="setting-box mt-2">
+             <h3>Add/Update Setting</h3>
+             <div class="form-grid" style="grid-template-columns: 120px 1fr;">
+               <label>Key:</label><input v-model="settingForm.key" placeholder="e.g. granule_price">
+               <label>Value:</label><input v-model="settingForm.value" placeholder="e.g. 0.5">
+               <label>Description:</label><input v-model="settingForm.description">
+             </div>
+             <button @click="saveSetting" class="btn-primary mt-2">Save Setting</button>
+           </div>
+           
+           <h3 class="mt-4">Current Settings</h3>
+           <table class="data-table">
+             <thead><tr><th>Key</th><th>Value</th><th>Description</th></tr></thead>
+             <tbody>
+               <tr v-for="s in systemSettings" :key="s.id">
+                 <td>{{ s.setting_key }}</td>
+                 <td>{{ s.setting_value }}</td>
+                 <td>{{ s.description }}</td>
+               </tr>
+             </tbody>
+           </table>
+        </div>
+
+
       </main>
     </div>
   </div>
